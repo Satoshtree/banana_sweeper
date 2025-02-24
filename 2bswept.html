@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Banana Sweeper</title>
+  <style>
+    /* Classic gray background */
+    body {
+      background: #c0c0c0;
+      font-family: "Courier New", monospace;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    #game-container {
+      border: 2px outset #ffffff;
+      padding: 10px;
+      background: #c0c0c0;
+      position: relative; /* So we can position the game-over/win screens */
+    }
+
+    /* Header with the face button in the center */
+    #header {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 8px;
+    }
+
+    /* Double the size of the wizard face icon */
+    #face {
+      width: 52px;   /* doubled from 26px */
+      height: 52px;  /* doubled from 26px */
+      border: 2px outset #ffffff;
+      background: #c0c0c0;
+      cursor: pointer;
+    }
+
+    /* The 8x8 grid of cells, each now 32x32px (previously 16x16) */
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(8, 32px);
+      grid-template-rows: repeat(8, 32px);
+      gap: 0;
+    }
+
+    /* Individual cell in "unrevealed" state */
+    .cell {
+      width: 32px;
+      height: 32px;
+      background: #c0c0c0;
+      border: 2px outset #ffffff;
+      text-align: center;
+      line-height: 32px; /* for vertically centered text */
+      font-size: 24px;   /* bigger font to match larger cell */
+      cursor: pointer;
+      user-select: none;
+    }
+
+    /* Revealed cell has a "sunken" 3D look */
+    .revealed {
+      border: 1px solid #7b7b7b;
+      background: #d4d0c8;
+      cursor: default;
+    }
+
+    /* Flagged cell styling */
+    .flagged {
+      background: #c0c0c0;
+      border: 2px outset #ffffff;
+      color: red;
+      font-weight: bold;
+    }
+
+    /* Move game-over and win screens off to the right,
+       so we can still see the board and the wizard when they appear. */
+    #game-over, #win-screen {
+      position: absolute;
+      top: 10px;
+      left: calc(100% + 20px); /* place it to the right of the main container */
+      background: #c0c0c0;
+      border: 2px outset #ffffff;
+      padding: 20px;
+      text-align: center;
+      display: none;
+      width: 220px; /* a bit wider to accommodate bigger font */
+    }
+
+    #game-over p, #win-screen p {
+      margin: 0 0 10px 0;
+    }
+
+    .restart-btn {
+      cursor: pointer;
+      border: 2px outset #ffffff;
+      padding: 5px 10px;
+      display: inline-block;
+      background: #c0c0c0;
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container">
+    <div id="header">
+      <img id="face" src="wizard.png" alt="Wizard Face" />
+    </div>
+    <div id="grid"></div>
+
+    <div id="game-over">
+      <p>Your Wizard is ded! Bananas are radioactive!</p>
+      <div class="restart-btn" onclick="restartGame()">X</div>
+    </div>
+
+    <div id="win-screen">
+      <p>Too much time in close proximity to dangerous bananas, radiation levels in your wizard  beard are greater than the recommended Banana Equivalent Dose aka B.E.D. therefore...<br/>your wizard is ded! from radiation poisoning...</p>
+      <div class="restart-btn" onclick="restartGame()">X</div>
+    </div>
+  </div>
+
+  <!-- Audio elements -->
+  <audio id="click-sound" src="fairydust.wav"></audio>
+  <audio id="bg-sound" src="didge.wav" loop></audio>
+
+  <script>
+  /**********************************************************
+   * Banana Sweeper - 8x8, 10 mines
+   * Classic Minesweeper logic, single HTML file.
+   * Requires:
+   *   1) wizard.png (default face)
+   *   2) deadwizard.png (lose)
+   *   3) alsodead.png (win)
+   *   4) banana.png (the "mine")
+   *   5) fairydust.wav (click sound)
+   *   6) didge.wav (looping background)
+   **********************************************************/
+  const ROWS = 8;
+  const COLS = 8;
+  const MINES = 10;
+
+  let board = [];    // Will hold cell objects: { mine, adjacent, revealed, flagged }
+  let gameOver = false;
+  let cellsRevealed = 0;
+  let faceImg;       // Wizard face element
+  let clickSound;    // Single-shot click effect
+  let bgSound;       // Looping background track
+
+  // On DOM load, start the game
+  document.addEventListener("DOMContentLoaded", () => {
+    faceImg = document.getElementById("face");
+    clickSound = document.getElementById("click-sound");
+    bgSound = document.getElementById("bg-sound");
+
+    // Set lower volume
+    bgSound.volume = 0.2;
+
+    // Fix autoplay restriction: start music on first user interaction
+    document.addEventListener("click", () => {
+        if (bgSound.paused) {
+            bgSound.play().catch(e => console.log("Audio play blocked:", e));
+        }
+    });
+
+    startGame();
+});
+  function startGame() {
+    gameOver = false;
+    cellsRevealed = 0;
+    faceImg.src = "wizard.png";
+    hideOverlayScreens();
+
+    generateBoard();
+    placeMines();
+    calculateAdjacency();
+    drawBoard();
+  }
+
+  function generateBoard() {
+    board = [];
+    for (let r = 0; r < ROWS; r++) {
+      const row = [];
+      for (let c = 0; c < COLS; c++) {
+        row.push({
+          mine: false,
+          adjacent: 0,
+          revealed: false,
+          flagged: false
+        });
+      }
+      board.push(row);
+    }
+  }
+
+  function placeMines() {
+    let minesToPlace = MINES;
+    while (minesToPlace > 0) {
+      const r = Math.floor(Math.random() * ROWS);
+      const c = Math.floor(Math.random() * COLS);
+      if (!board[r][c].mine) {
+        board[r][c].mine = true;
+        minesToPlace--;
+      }
+    }
+  }
+
+  function calculateAdjacency() {
+    // For each cell, count adjacent mines
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (board[r][c].mine) continue;
+        let count = 0;
+        for (let rr = r - 1; rr <= r + 1; rr++) {
+          for (let cc = c - 1; cc <= c + 1; cc++) {
+            if (isValidCell(rr, cc) && board[rr][cc].mine) {
+              count++;
+            }
+          }
+        }
+        board[r][c].adjacent = count;
+      }
+    }
+  }
+
+  function drawBoard() {
+    const grid = document.getElementById("grid");
+    grid.innerHTML = ""; // Clear any old cells
+
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        const cellDiv = document.createElement("div");
+        cellDiv.className = "cell";
+        cellDiv.id = `cell-${r}-${c}`;
+
+        // Left click
+        cellDiv.addEventListener("click", () => handleLeftClick(r, c));
+
+        // Right click (flag)
+        cellDiv.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          handleRightClick(r, c);
+        });
+
+        grid.appendChild(cellDiv);
+      }
+    }
+  }
+
+  function handleLeftClick(r, c) {
+    if (gameOver) return;
+    playClickSound();
+
+    const cell = board[r][c];
+    if (cell.revealed || cell.flagged) return;
+
+    cell.revealed = true;
+    cellsRevealed++;
+
+    if (cell.mine) {
+      // Reveal all mines, game over
+      revealAllMines();
+      setFaceDead();
+      showGameOverScreen();
+      gameOver = true;
+      return;
+    }
+
+    // If adjacency = 0, reveal neighbors (flood fill)
+    if (cell.adjacent === 0) {
+      floodReveal(r, c);
+    }
+
+    updateCellDisplay(r, c);
+    checkWin();
+  }
+
+  function handleRightClick(r, c) {
+    if (gameOver) return;
+    playClickSound();
+
+    const cell = board[r][c];
+    if (cell.revealed) return;
+
+    cell.flagged = !cell.flagged;
+    updateCellDisplay(r, c);
+  }
+
+  function floodReveal(row, col) {
+    // Standard BFS/DFS approach
+    const stack = [[row, col]];
+    while (stack.length > 0) {
+      const [r, c] = stack.pop();
+      for (let rr = r - 1; rr <= r + 1; rr++) {
+        for (let cc = c - 1; cc <= c + 1; cc++) {
+          if (isValidCell(rr, cc)) {
+            const neighbor = board[rr][cc];
+            if (!neighbor.revealed && !neighbor.flagged && !neighbor.mine) {
+              neighbor.revealed = true;
+              cellsRevealed++;
+              updateCellDisplay(rr, cc);
+              // If adjacent is 0, keep revealing
+              if (neighbor.adjacent === 0) {
+                stack.push([rr, cc]);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function revealAllMines() {
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS; c++) {
+        if (board[r][c].mine) {
+          board[r][c].revealed = true;
+          updateCellDisplay(r, c);
+        }
+      }
+    }
+  }
+
+  function updateCellDisplay(r, c) {
+    const cellDiv = document.getElementById(`cell-${r}-${c}`);
+    const cell = board[r][c];
+
+    if (cell.revealed) {
+      cellDiv.classList.add("revealed");
+      cellDiv.classList.remove("flagged");
+      cellDiv.style.border = "1px solid #7b7b7b";
+
+      if (cell.mine) {
+        // Show banana mine icon, scaled to 32x32
+        cellDiv.style.backgroundImage = "url('banana.png')";
+        cellDiv.style.backgroundRepeat = "no-repeat";
+        cellDiv.style.backgroundPosition = "center";
+        cellDiv.style.backgroundSize = "32px 32px";
+        cellDiv.textContent = "";
+      } else {
+        // Clear background to show number
+        cellDiv.style.backgroundImage = "none";
+        cellDiv.textContent = cell.adjacent > 0 ? cell.adjacent : "";
+      }
+    } else {
+      // Not revealed
+      cellDiv.classList.remove("revealed");
+      if (cell.flagged) {
+        cellDiv.textContent = "F";
+        cellDiv.classList.add("flagged");
+      } else {
+        cellDiv.textContent = "";
+        cellDiv.classList.remove("flagged");
+      }
+      cellDiv.style.backgroundImage = "none";
+      cellDiv.style.border = "2px outset #ffffff";
+    }
+  }
+
+  function checkWin() {
+    // If all non-mine cells are revealed, you win
+    if (cellsRevealed === (ROWS * COLS - MINES) && !gameOver) {
+      gameOver = true;
+      setFaceWin();
+      showWinScreen();
+    }
+  }
+
+  function isValidCell(r, c) {
+    return r >= 0 && r < ROWS && c >= 0 && c < COLS;
+  }
+
+  function setFaceDead() {
+    faceImg.src = "deadwizard.png";
+  }
+
+  function setFaceWin() {
+    faceImg.src = "alsodead.png";
+  }
+
+  function showGameOverScreen() {
+    document.getElementById("game-over").style.display = "block";
+  }
+
+  function showWinScreen() {
+    document.getElementById("win-screen").style.display = "block";
+  }
+
+  function hideOverlayScreens() {
+    document.getElementById("game-over").style.display = "none";
+    document.getElementById("win-screen").style.display = "none";
+  }
+
+  function restartGame() {
+    startGame();
+  }
+
+  function playClickSound() {
+    // Restart from time 0 for multiple quick clicks
+    clickSound.currentTime = 0;
+    clickSound.play().catch(e => {});
+  }
+  </script>
+</body>
+</html>
